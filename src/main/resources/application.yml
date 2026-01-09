@@ -37,13 +37,13 @@ spring:
             locator:
               enabled: true
               lower-case-service-id: true
-          routes:
-            - id: product-service
-              uri: lb://PRODUCT-SERVICE
-              predicates:
-                - Path=/api/v1/products/**
-              filters:
-                - TokenRelay=
+#          routes:
+#            - id: product-service
+#              uri: lb://PRODUCT-SERVICE
+#              predicates:
+#                - Path=/api/v1/products/**
+#              filters:
+#                - TokenRelay=
 
 # Application Configuration(nextjs and oauth2 server)
 app:
