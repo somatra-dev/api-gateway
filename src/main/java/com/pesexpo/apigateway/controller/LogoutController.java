@@ -4,59 +4,156 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.server.reactive.ServerHttpResponse;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.oauth2.client.ReactiveOAuth2AuthorizedClientService;
+import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
+import org.springframework.security.oauth2.core.OAuth2AccessToken;
+import org.springframework.security.oauth2.core.OAuth2RefreshToken;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.reactive.function.BodyInserters;
+import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 
 @Slf4j
 @Controller
 public class LogoutController {
 
-    @Value("${app.auth-server.url:http://localhost:9000}")
-    private String authServerUrl;
+    private final String authServerUrl;
+    private final String frontendUrl;
+    private final String clientId;
+    private final String clientSecret;
+    private final ReactiveOAuth2AuthorizedClientService authorizedClientService;
+    private final WebClient webClient;
 
-    @Value("${app.frontend.url:http://localhost:3000}")
-    private String frontendUrl;
+    public LogoutController(
+            @Value("${app.auth-server.url:http://localhost:9000}") String authServerUrl,
+            @Value("${app.frontend.url:http://localhost:3000}") String frontendUrl,
+            @Value("${spring.security.oauth2.client.registration.api-gateway-client.client-id:api-gateway}") String clientId,
+            @Value("${spring.security.oauth2.client.registration.api-gateway-client.client-secret:gateway-secret}") String clientSecret,
+            ReactiveOAuth2AuthorizedClientService authorizedClientService,
+            WebClient.Builder webClientBuilder) {
+        this.authServerUrl = authServerUrl;
+        this.frontendUrl = frontendUrl;
+        this.clientId = clientId;
+        this.clientSecret = clientSecret;
+        this.authorizedClientService = authorizedClientService;
+        this.webClient = webClientBuilder.build();  // Build once, reuse ✅
+    }
 
     @PostMapping("/logout")
     public Mono<Void> logout(ServerWebExchange exchange) {
         log.info("=== Processing logout request ===");
 
-        // Clear local session first
-        return exchange.getSession()
-                .flatMap(session -> {
-                    log.info("Invalidating local session: {}", session.getId());
-                    return session.invalidate();
-                })
-                .then(Mono.defer(() -> {
-                    // Clear cookies
-                    clearCookies(exchange.getResponse());
+        return ReactiveSecurityContextHolder.getContext()
+                .flatMap(securityContext -> {
+                    Authentication authentication = securityContext.getAuthentication();
 
-                    // Check if we have an authenticated user to do OIDC logout
-                    return ReactiveSecurityContextHolder.getContext()
-                            .flatMap(securityContext -> {
-                                if (securityContext.getAuthentication() != null &&
-                                        securityContext.getAuthentication().getPrincipal() instanceof OidcUser oidcUser) {
+                    if (authentication instanceof OAuth2AuthenticationToken oauthToken &&
+                            authentication.getPrincipal() instanceof OidcUser oidcUser) {
 
-                                    // Perform OIDC logout
+                        String clientRegistrationId = oauthToken.getAuthorizedClientRegistrationId();
+                        String principalName = oauthToken.getName();
+
+                        // 1. Revoke tokens first
+                        return revokeTokens(clientRegistrationId, principalName)
+                                // 2. Remove authorized client from storage
+                                .then(authorizedClientService.removeAuthorizedClient(clientRegistrationId, principalName))
+                                .doOnSuccess(v -> log.info("Removed authorized client for user: {}", principalName))
+                                // 3. Invalidate session
+                                .then(exchange.getSession())
+                                .flatMap(session -> {
+                                    log.info("Invalidating local session: {}", session.getId());
+                                    return session.invalidate();
+                                })
+                                // 4. Clear cookies and perform OIDC logout
+                                .then(Mono.defer(() -> {
+                                    clearCookies(exchange.getResponse());
                                     return performOidcLogout(oidcUser, exchange);
-                                }
+                                }));
+                    }
 
-                                // No OIDC user, just redirect to frontend
-                                return redirectToFrontend(exchange);
+                    // No OAuth2 authentication, just clear session
+                    return exchange.getSession()
+                            .flatMap(session -> {
+                                log.info("Invalidating local session: {}", session.getId());
+                                return session.invalidate();
                             })
-                            .switchIfEmpty(redirectToFrontend(exchange));
+                            .then(Mono.defer(() -> {
+                                clearCookies(exchange.getResponse());
+                                return redirectToFrontend(exchange);
+                            }));
+                })
+                .switchIfEmpty(Mono.defer(() -> {
+                    clearCookies(exchange.getResponse());
+                    return redirectToFrontend(exchange);
                 }));
+    }
+
+    /**
+     * Revoke both access_token and refresh_token at the authorization server
+     */
+    private Mono<Void> revokeTokens(String clientRegistrationId, String principalName) {
+        return authorizedClientService.loadAuthorizedClient(clientRegistrationId, principalName)
+                .flatMap(authorizedClient -> {
+                    OAuth2AccessToken accessToken = authorizedClient.getAccessToken();
+                    OAuth2RefreshToken refreshToken = authorizedClient.getRefreshToken();
+
+                    log.info("Revoking tokens for user: {}", principalName);
+
+                    // Revoke both tokens in parallel
+                    Mono<Void> revokeAccess = accessToken != null
+                            ? revokeToken(accessToken.getTokenValue(), "access_token")
+                            : Mono.empty();
+
+                    Mono<Void> revokeRefresh = refreshToken != null
+                            ? revokeToken(refreshToken.getTokenValue(), "refresh_token")
+                            : Mono.empty();
+
+                    return Mono.when(revokeAccess, revokeRefresh)
+                            .doOnSuccess(v -> log.info("Successfully revoked all tokens for user: {}", principalName))
+                            .doOnError(e -> log.error("Error revoking tokens: {}", e.getMessage()));
+                })
+                .onErrorResume(e -> {
+                    log.warn("Could not load authorized client for token revocation: {}", e.getMessage());
+                    return Mono.empty();
+                })
+                .then();
+    }
+
+    /**
+     * Call the OAuth2 token revocation endpoint
+     */
+    private Mono<Void> revokeToken(String token, String tokenTypeHint) {
+        String credentials = Base64.getEncoder()
+                .encodeToString((clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8));
+
+        return webClient
+                .post()
+                .uri(authServerUrl + "/oauth2/revoke")
+                .header(HttpHeaders.AUTHORIZATION, "Basic " + credentials)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(BodyInserters
+                        .fromFormData("token", token)
+                        .with("token_type_hint", tokenTypeHint))
+                .retrieve()
+                .toBodilessEntity()
+                .doOnSuccess(response -> log.info("Successfully revoked {}", tokenTypeHint))
+                .doOnError(e -> log.error("Failed to revoke {}: {}", tokenTypeHint, e.getMessage()))
+                .onErrorResume(e -> Mono.empty()) // Continue even if revocation fails
+                .then();
     }
 
     private Mono<Void> performOidcLogout(OidcUser oidcUser, ServerWebExchange exchange) {
