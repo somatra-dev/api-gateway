@@ -50,7 +50,7 @@ public class LogoutController {
         this.clientId = clientId;
         this.clientSecret = clientSecret;
         this.authorizedClientService = authorizedClientService;
-        this.webClient = webClientBuilder.build();  // Build once, reuse ✅
+        this.webClient = webClientBuilder.build();
     }
 
     @PostMapping("/logout")

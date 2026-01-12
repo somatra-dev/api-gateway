@@ -47,19 +47,20 @@ public class RouteGatewayConfig {
                 // For server-side rendered pages (not API calls)
                 // Static assets from NextJS
                 .route("nextjs-static", r -> r
-                        .path("/_next/**")
+                        .path("/_next/**", "/favicon.ico", "/images/**", "/fonts/**")
                         .uri(frontendUrl))
 
                 // NextJS pages (SSR) - catch-all for page navigation
                 // This routes page requests to NextJS for server-side rendering
                 .route("nextjs-pages", r -> r
-                        .path("/app/**", "/products/**", "/orders/**")
+                        .path("/**")
                         .filters(GatewayFilterSpec::tokenRelay)
                         .uri(frontendUrl))
 
-                // NextJS root and other pages
-                .route("nextjs-root", r -> r
-                        .path("/", "/favicon.ico")
+                // Browser → Gateway → NextJS BFF → Microservices
+                .route("nextjs-bff", r -> r
+                        .path("/api/**")
+                        .filters(GatewayFilterSpec::tokenRelay)
                         .uri(frontendUrl))
 
                 .build();
