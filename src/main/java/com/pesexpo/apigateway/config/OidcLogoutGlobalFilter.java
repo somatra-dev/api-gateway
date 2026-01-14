@@ -29,6 +29,9 @@ public class OidcLogoutGlobalFilter implements GlobalFilter {
     @Value("${app.auth-server.url:http://localhost:9000}")
     private String authServerUrl;
 
+    @Value("${app.gateway.url:http://localhost:8888}")
+    private String gatewayUrl;
+
     @Value("${spring.security.oauth2.client.registration.api-gateway-client.client-id}")
     private String clientId;
 
@@ -91,7 +94,7 @@ public class OidcLogoutGlobalFilter implements GlobalFilter {
             }
 
             // Add post_logout_redirect_uri
-            String postLogoutUri = "http://localhost:8888/logout-success";
+            String postLogoutUri = gatewayUrl + "/logout-success";
             url.append("&post_logout_redirect_uri=")
                     .append(URLEncoder.encode(postLogoutUri, StandardCharsets.UTF_8));
 
@@ -101,7 +104,7 @@ public class OidcLogoutGlobalFilter implements GlobalFilter {
         } else {
             // Fallback: logout without ID token (will show confirmation page)
             log.info("No OIDC user found, building basic logout URL");
-            String postLogoutUri = "http://localhost:8888/logout-success";
+            String postLogoutUri = gatewayUrl + "/logout-success";
             url.append("?post_logout_redirect_uri=")
                     .append(URLEncoder.encode(postLogoutUri, StandardCharsets.UTF_8));
         }

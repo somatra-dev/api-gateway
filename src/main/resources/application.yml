@@ -4,8 +4,7 @@ spring:
 
   security:
     oauth2:
-      # OAuth2 Client configuration - Gateway acts as OAuth2 Client (NOT Resource Server)
-      # This is the correct pattern for BFF - session-based auth, not stateless JWT
+      # OAuth2 Client configuration - for browser (session-based)
       client:
         registration:
           api-gateway-client:
@@ -35,7 +34,7 @@ spring:
         webflux:
           discovery:
             locator:
-              enabled: true
+              enabled: false
               lower-case-service-id: true
 #          routes:
 #            - id: product-service
@@ -45,10 +44,12 @@ spring:
 #              filters:
 #                - TokenRelay=
 
-# Application Configuration(nextjs and oauth2 server)
+# Application Configuration(nextjs, gateway, oauth2 server)
 app:
   frontend:
     url: ${FRONTEND_URL:http://localhost:3000}
+  gateway:
+    url: ${GATEWAY_URL:http://localhost:8888}
   auth-server:
     url: ${OAUTH2_ISSUER_URI:http://localhost:9000}
 

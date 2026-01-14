@@ -8,16 +8,13 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Route Configuration for BFF (Backend-for-Frontend) Pattern
+ * Route Configuration for BFF Behind Gateway Pattern
  *
- * Architecture:
- * 1. Browser calls Gateway for ALL requests (single entry point)
- * 2. Gateway handles OAuth2 authentication (session-based)
- * 3. Gateway routes API calls to microservices with TokenRelay
- * 4. Gateway routes page requests to NextJS for SSR
+ * Browser → Gateway:8888 → NextJS BFF → Gateway → Microservices
  *
- * This avoids double-routing through Gateway that happens when
- * NextJS proxies API calls back through Gateway.
+ * Routes:
+ * - /bff/** → NextJS (strips /bff prefix)
+ * - /api/v1/** → Microservices (direct with TokenRelay)
  */
 @Configuration
 public class RouteGatewayConfig {
@@ -29,8 +26,7 @@ public class RouteGatewayConfig {
     public RouteLocator customRouteLocator(RouteLocatorBuilder builder) {
         return builder.routes()
 
-                // MICROSERVICES API ROUTES
-                // Browser → Gateway → Microservice (direct, with TokenRelay)
+                // MICROSERVICES API ROUTES (direct access with TokenRelay)
                 // Product Service
                 .route("product-service", r -> r
                         .path("/api/v1/products/**")
@@ -43,25 +39,28 @@ public class RouteGatewayConfig {
                         .filters(GatewayFilterSpec::tokenRelay)
                         .uri("lb://ORDER-SERVICE"))
 
-                // NEXTJS SSR ROUTES
-                // For server-side rendered pages (not API calls)
-                // Static assets from NextJS
+                // BFF ROUTE - Browser → Gateway → NextJS BFF
+                // /bff/** → Next.js (strip /bff prefix)
+                .route("nextjs-bff", r -> r
+                        .path("/bff/**")
+                        .filters(f -> f
+                                .tokenRelay()
+                                .rewritePath("/bff(?<segment>/?.*)", "${segment}"))
+                        .uri(frontendUrl))
+
+                // NEXTJS STATIC ASSETS
                 .route("nextjs-static", r -> r
                         .path("/_next/**", "/favicon.ico", "/images/**", "/fonts/**")
                         .uri(frontendUrl))
 
-                // NextJS pages (SSR) - catch-all for page navigation
-                // This routes page requests to NextJS for server-side rendering
-                .route("nextjs-pages", r -> r
-                        .path("/**")
-                        .filters(GatewayFilterSpec::tokenRelay)
-                        .uri(frontendUrl))
-
-                // Browser → Gateway → NextJS BFF → Microservices
-                .route("nextjs-bff", r -> r
-                        .path("/api/**")
-                        .filters(GatewayFilterSpec::tokenRelay)
-                        .uri(frontendUrl))
+                // NEXTJS PAGES (SSR) - catch-all (must be last)
+//                 Temporarily disabled to test logout - if logout works, the .not() predicate is broken
+                 .route("nextjs-pages", r -> r
+                         .path("/**")
+                         .and()
+                         .not(p -> p.path("/logout", "/logout-success", "/login", "/oauth2/**", "/error"))
+                         .filters(GatewayFilterSpec::tokenRelay)
+                         .uri(frontendUrl))
 
                 .build();
     }

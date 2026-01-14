@@ -32,7 +32,7 @@ import java.util.Base64;
 public class LogoutController {
 
     private final String authServerUrl;
-    private final String frontendUrl;
+    private final String gatewayUrl;
     private final String clientId;
     private final String clientSecret;
     private final ReactiveOAuth2AuthorizedClientService authorizedClientService;
@@ -40,13 +40,13 @@ public class LogoutController {
 
     public LogoutController(
             @Value("${app.auth-server.url:http://localhost:9000}") String authServerUrl,
-            @Value("${app.frontend.url:http://localhost:3000}") String frontendUrl,
+            @Value("${app.gateway.url:http://localhost:8888}") String gatewayUrl,
             @Value("${spring.security.oauth2.client.registration.api-gateway-client.client-id:api-gateway}") String clientId,
             @Value("${spring.security.oauth2.client.registration.api-gateway-client.client-secret:gateway-secret}") String clientSecret,
             ReactiveOAuth2AuthorizedClientService authorizedClientService,
             WebClient.Builder webClientBuilder) {
         this.authServerUrl = authServerUrl;
-        this.frontendUrl = frontendUrl;
+        this.gatewayUrl = gatewayUrl;
         this.clientId = clientId;
         this.clientSecret = clientSecret;
         this.authorizedClientService = authorizedClientService;
@@ -195,7 +195,7 @@ public class LogoutController {
         }
 
         // Add post_logout_redirect_uri
-        String redirectUri = "http://localhost:8888/logout-success";
+        String redirectUri = gatewayUrl + "/logout-success";
         url.append(hasParam ? "&" : "?")
                 .append("post_logout_redirect_uri=")
                 .append(URLEncoder.encode(redirectUri, StandardCharsets.UTF_8));
@@ -211,7 +211,7 @@ public class LogoutController {
 
         ServerHttpResponse response = exchange.getResponse();
         response.setStatusCode(HttpStatus.FOUND);
-        response.getHeaders().setLocation(URI.create(frontendUrl + "?logout=success"));
+        response.getHeaders().setLocation(URI.create(gatewayUrl + "?logout=success"));
 
         return response.setComplete();
     }
@@ -242,9 +242,9 @@ public class LogoutController {
         // Clear any remaining cookies
         clearCookies(response);
 
-        // Redirect to frontend
+        // Redirect to frontend(gateway port 8888)
         response.setStatusCode(HttpStatus.FOUND);
-        response.getHeaders().set(HttpHeaders.LOCATION, frontendUrl + "?logout=success&oidc=true");
+        response.getHeaders().set(HttpHeaders.LOCATION, gatewayUrl + "?logout=success&oidc=true");
 
         return response.setComplete();
     }

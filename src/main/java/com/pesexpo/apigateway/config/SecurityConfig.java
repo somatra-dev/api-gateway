@@ -11,10 +11,6 @@ import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.oauth2.client.registration.ReactiveClientRegistrationRepository;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.authentication.RedirectServerAuthenticationSuccessHandler;
-import org.springframework.security.web.server.csrf.CookieServerCsrfTokenRepository;
-import org.springframework.security.web.server.csrf.ServerCsrfTokenRequestAttributeHandler;
-import org.springframework.web.server.WebFilter;
-import reactor.core.publisher.Mono;
 
 @Slf4j
 @Configuration
@@ -25,18 +21,18 @@ public class SecurityConfig {
     @Value("${app.frontend.url:http://localhost:3000}")
     private String frontendUrl;
 
-    private final ReactiveClientRegistrationRepository clientRegistrationRepository;
+    @Value("${app.gateway.url:http://localhost:8888}")
+    private String gatewayUrl;
+
 
     @Bean
     public SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http) {
         return http
-                // Disable default logout (using GlobalFilter)
+                // Disable Spring Security logout - using LogoutWebFilter
                 .logout(ServerHttpSecurity.LogoutSpec::disable)
 
-                .csrf(csrf -> csrf
-                        .csrfTokenRepository(CookieServerCsrfTokenRepository.withHttpOnlyFalse())
-                        .csrfTokenRequestHandler(new ServerCsrfTokenRequestAttributeHandler())
-                )
+                // disable CSRF
+                .csrf(ServerHttpSecurity.CsrfSpec::disable)
 
                 .authorizeExchange(exchange -> exchange
                         .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
@@ -44,34 +40,42 @@ public class SecurityConfig {
                                 "/",
                                 "/login",
                                 "/oauth2/**",
-                                "/logout",           // GlobalFilter
-                                "/logout-success",   // LogoutController
+                                "/logout",
+                                "/logout-success",
                                 "/error",
-                                "/favicon.ico"
+                                "/favicon.ico",
+                                // Next.js static assets
+                                "/_next/**",
+                                "/images/**",
+                                "/fonts/**"
                         ).permitAll()
                         .anyExchange().authenticated()
                 )
 
+                // OAuth2 Login for browser (session-based)
                 .oauth2Login(oauth2 -> oauth2
                         .authenticationSuccessHandler(
-                                new RedirectServerAuthenticationSuccessHandler(frontendUrl)
+                                new RedirectServerAuthenticationSuccessHandler(gatewayUrl + "/")
                         )
                 )
-
                 .build();
     }
 
-    @Bean
-    public WebFilter csrfCookieWebFilter() {
-        return (exchange, chain) -> {
-            Mono<org.springframework.security.web.server.csrf.CsrfToken> csrfToken =
-                    exchange.getAttribute(org.springframework.security.web.server.csrf.CsrfToken.class.getName());
-            assert csrfToken != null;
-            return csrfToken.doOnSuccess(token -> {
-                if (token != null) {
-                    exchange.getResponse().getHeaders().add("X-XSRF-TOKEN", token.getToken());
-                }
-            }).then(chain.filter(exchange));
-        };
-    }
+    // @Bean
+    // public WebFilter csrfCookieWebFilter() {
+    //     return (exchange, chain) -> {
+    //         Mono<org.springframework.security.web.server.csrf.CsrfToken> csrfToken =
+    //                 exchange.getAttribute(org.springframework.security.web.server.csrf.CsrfToken.class.getName());
+    //         if (csrfToken == null) {
+    //             return chain.filter(exchange);
+    //         }
+    //         return csrfToken
+    //                 .doOnSuccess(token -> {
+    //                     if (token != null) {
+    //                         exchange.getResponse().getHeaders().add("X-XSRF-TOKEN", token.getToken());
+    //                     }
+    //                 })
+    //                 .then(chain.filter(exchange));
+    //     };
+    // }
 }
